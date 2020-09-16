@@ -3,11 +3,10 @@ layout: post
 title:  "Implementing the parallel evaluation of IIR filters"
 date:   2020-09-16 13:49:17 -0400
 ---
-# Understanding "IIR filters can be evaluated in parallel"
 
 ## Introduction
 
-This is an attempt to understand Raph Levien's [IIR filters can be evaluated in parallel](https://raphlinus.github.io/audio/2019/02/14/parallel-iir.html) by a person with no particular knowledge of DSP, filtering or relevant mathematics, just an interest in evaluating an IIR filter in parallel and a good deal of programming experience! The goal is to produce an implementation of this article demonstrating in code the approach Raph describes.
+This is an attempt to understand Raph Levien's [IIR filters can be evaluated in parallel](https://raphlinus.github.io/audio/2019/02/14/parallel-iir.html) by a person with no particular knowledge of DSP, filtering or relevant mathematics, just an interest in evaluating an IIR filter in parallel and a good deal of programming experience! The goal is to produce an implementation of this article demonstrating in code the approach Raph describes. The code won't be optimal by any means, but should serve as a sufficient base for building something much better.
 
 Right from the get go we get an inkling this might not be as straight-forward as we might hope:
 
@@ -55,18 +54,24 @@ D: 0
 
 Finally we can write the filter in state-space form. State-space form is generally written as:
 
-`x[n+1] = Ax[n] + Bu[n]`
-`y[n] = Cx[n] + Du[n]`
+```
+x[n+1] = Ax[n] + Bu[n]
+y[n] = Cx[n] + Du[n]
+```
 
 So far our equations have had `y` as the output (i.e the filtered signal) and `x` as the input (i.e. the signal to be filtered.) State-space changes this, the signal to be filtered is `u` and `x` is the _state vector_. Generally, `A` and `C` are matrices and `B` and `D` are vectors. Since our filter is first-order, each of these values are simply numbers. `D` is zero so it can be removed entirely and `B` is one so it can be simplified to:
 
-`x[n+1] = Ax[n] + u[n]`
-`y[n] = Cx[n]`
+```
+x[n+1] = Ax[n] + u[n]
+y[n] = Cx[n]
+```
 
-or using the constant `C` from the RC-lowpass filter equation:
+substituting the constant `C` from the RC-lowpass filter equation:
 
-`x[n+1] = (1-C)x[n] + u[n]`
-`y[n] = Cx[n]`
+```
+x[n+1] = (1 - C)x[n] + u[n]
+y[n] = Cx[n]`
+```
 
 ---
 
@@ -117,14 +122,20 @@ Raph makes the following statement:
 >Given `(a1, b1)` and `(a2, b2)`, their composition is `(a1 * a2, a2 * b1 + b2)`.
 
 What is function composition? Say we have two functions, `f1` and `f2`, composition is simply `f2(f1(x))`. In our case the two functions are:
-`f1: y[n] = a1y[n-1] + b1`
-`f2: y[n] = a2y[n-1] + b2`
+```
+f1: y[n] = a1 * y[n-1] + b1
+f2: y[n] = a2 * y[n-1] + b2
+```
 
 The function composition, `f2(f1(x))` is thus:
-`y[n] = a2(a1y[n-1] + b1) + b2`
+```
+y[n] = a2 * (a1 * y[n-1] + b1) + b2
+```
 which multiplies out to:
-`y[n] = a2*a1*y[n-1] + a2*b1 + b2`.
-This is clearly still of the form `y[n] = ay[n-1] + b`, with `(a, b)` now being `(a2 * a1, a2 * b1 + b2)`.
+```
+y[n] = a2 * a1 * y[n-1] + a2 * b1 + b2
+```
+This is clearly still of the form `y[n] = a * y[n-1] + b`, with `(a, b)` now being `(a2 * a1, a2 * b1 + b2)`.
 
 
 ### Why is our target monoid represented as `(a , b)`?
@@ -133,34 +144,36 @@ This is now easier to understand. To represent the history of all prior invocati
 
 In other words, the history `fn(fn-1(fn-2(fn-3(...f0(0)...))))` can be represented as simply `fn(0)` provided we know the `(a, b)` pair.
 
-Why do we know the initial input is zero? This chain of functions starts with `y[0] = ...`. But `y[0]` cannot be defined by a prior `y[-1]`, by definition there is nothing before the first element. Therefore the initial value for `y[n-1]` must be zero.
+Why do we know the initial input is zero? This chain of functions starts with `y[0] = ...`. But `y[0]` cannot be defined by a prior `y[-1]`; by definition there is nothing before the first element. Therefore the initial value for `y[n-1]` must be zero.
 
 ### Why is `y_out = a * y_in + b` our target monoid?
 
 The state space representation for our filter was written as two equations:
-`x[n+1] = (1-C)x[n] + u[n]`
-`y[n] = Cx[n]`
+```
+x[n+1] = (1-C)x[n] + u[n]
+y[n] = Cx[n]
+```
 
 Our goal is to evaluate the filter in parallel, so we want to get rid of recursion. The equation for the _state vector_, `x[n]` is recursive, so that's our target. We already know we can evaluate this equation without requiring the prior values provided we can compute values for `(a, b)`.
 
 Also, from the introduction to this section, we're told:
 >The basic insight is that the target monoid is a function from input state to output state
 
-`x[n]` is the _state vector_ so our target monoid is evaluating the state of the filter at any `n`.
+`x[n]` is the _state vector_ so our target monoid is evaluating the state of the filter at any `n` and producing the corresponding output state.
 
 ### How does the input mapping result in `(c, x * (1 - c)`?
 
 All the pieces are in place, now we just need to compute those `(a, b)` values. We've got our target monoid:
 
-`x[n+1] = (1-C)x[n] + u[n]`
+`x[n+1] = (1 - C) * x[n] + u[n]`
 
 let's write it as:
 
-`y_out = (1-C)y_in + b`
+`y_out = (1 - C) * y_in + b`
 
 Remember `u[n]` is the signal, so when we feed in a single sample `x`, it takes the place of `u[n]` which is `b` in our target form:
 
-`y_out = (1-C)y_in + x`.
+`y_out = (1 - C) * y_in + x`.
 
 Pretty clearly, `(a, b)` is `(1 - C, x)`. That's not what we expected. There are two reasons for this.
 
@@ -193,7 +206,7 @@ This can be written as an equation that should seem pretty familiar by now:
 
 A prefix sum is not limited to addition, it applies to anything with a binary associative operator. That should also be familiar, any monoid can be the operator for a prefix sum.
 
-It turns out that this can be computed in parallel. There are many algorithms for this. Here's an example of how it can be done (not necessarily efficient, but it proves the concept). Let's say we have two threads and want to compute the prefix sum at each element for:
+It turns out that this can be computed in parallel. There are many algorithms for this. Here's an example of how it can be done (not at all efficient, but it illustrates that it is possible.) Let's say we have two threads and want to compute the prefix sum at each element for:
 
 `[1, 2, 3, 4, 5, 6, 7, 8]`
 
@@ -256,7 +269,7 @@ Let's define our monoid state, a method to bind an input sample into a monoid st
 type State = (f64, f64);
 
 fn bind(x: f64) -> State {
-    (1. - C, x * C)
+    (1. - C, x)
 }
 
 fn monoid_operator(f1: State, f2: State) -> State {
@@ -267,7 +280,7 @@ fn monoid_operator(f1: State, f2: State) -> State {
 }
 ```
 
-All that should be pretty familiar by now. Now let's define a method to compute the prefix sum. This is taken from [Wiki](https://en.wikipedia.org/wiki/Prefix_sum#Algorithm_1:_Shorter_span,_more_parallel), it isn't the most efficient algorithm, but it serves our purpose. We'll use `into_par_iter()` from `Rayon` to get parallelism without much effort.
+All that should be pretty familiar by now. Now let's define a method to compute the prefix sum. This is taken from [Wiki](https://en.wikipedia.org/wiki/Prefix_sum#Algorithm_1:_Shorter_span,_more_parallel), it isn't the most efficient algorithm, but it serves our purpose. We'll use `into_par_iter()` from [Rayon](https://crates.io/crates/rayon) to get parallelism without much effort.
 
 ```
 fn scan_monoid(input: &mut [f64]) {
@@ -293,7 +306,7 @@ fn scan_monoid(input: &mut [f64]) {
     for i in 0..input.len() {
         let (_a, b) = x[log2n][i];
 
-        input[i] = b;
+        input[i] = C * b;
     }
 }
 ```

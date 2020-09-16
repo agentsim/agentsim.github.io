@@ -1,6 +1,6 @@
 ---
 layout: post
-title:  "Implementing the parallel evaluation of IIR filters"
+title:  "The parallel evaluation of IIR filters - An Implementation"
 date:   2020-09-16 13:49:17 -0400
 ---
 
